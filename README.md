@@ -3,4 +3,6 @@
 
 Have only tested this code with a Niimbot D11
 
+Should be able to open this right in android studio and build a working sample app. 
+
 Code based of python implementation found here: https://github.com/kjy00302/niimprint
