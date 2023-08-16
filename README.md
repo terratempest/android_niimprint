@@ -3,6 +3,12 @@
 
 Have only tested this code with a Niimbot D11
 
-Should be able to open this right in android studio and build a working sample app. 
-
 Code based of python implementation found here: https://github.com/kjy00302/niimprint
+
+# Usage
+
+// Initialize and connect to the printer
+val printer = NiimbotPrinterClient(bluetoothAddress: String, bluetoothAdapter: BluetoothAdapter)
+
+// Print bitmap image
+printer.printLabel(image: Bitmap, width: Int, height: Int, labelQty: Int = 1, labelType: Int = 1, labelDensity: Int = 2)

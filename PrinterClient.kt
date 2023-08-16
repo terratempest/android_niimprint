@@ -1,4 +1,4 @@
-package com.example.android_niimprint.printing
+package com.example.invello.printing
 
 import android.annotation.SuppressLint
 import java.nio.ByteBuffer
@@ -6,22 +6,220 @@ import java.util.*
 import android.bluetooth.BluetoothSocket
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothAdapter
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Matrix
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.InputStream
+import kotlin.experimental.or
 
-class PrinterClient(
+class NiimbotPrinterClient(
     address: String,
     bluetoothAdapter: BluetoothAdapter
 ) {
 
     private var socket: BluetoothSocket? = null
 
-    init {
-
-        initializeSocket(bluetoothAdapter, address)
+    private enum class RequestCodeEnum(val value: Int) {
+        GET_INFO(64),
+        GET_RFID(26),
+        HEARTBEAT(220),
+        SET_LABEL_TYPE(35),
+        SET_LABEL_DENSITY(33),
+        START_PRINT(1),
+        END_PRINT(243),
+        START_PAGE_PRINT(3),
+        END_PAGE_PRINT(227),
+        ALLOW_PRINT_CLEAR(32),
+        SET_DIMENSION(19),
+        SET_QUANTITY(21),
+        GET_PRINT_STATUS(163)
     }
 
+    enum class InfoEnum(val value: Int) {
+        DENSITY(1),
+        PRINTSPEED(2),
+        LABELTYPE(1),
+        LANGUAGETYPE(6),
+        AUTOSHUTDOWNTIME(7),
+        DEVICETYPE(8),
+        SOFTVERSION(9),
+        BATTERY(10),
+        DEVICESERIAL(11),
+        HARDVERSION(12)
+    }
+
+    private class NiimbotPacket(val type: Byte, val data: ByteArray) {
+
+        companion object {
+            fun fromBytes(pkt: ByteArray): NiimbotPacket {
+                require(pkt.sliceArray(0..1).contentEquals(byteArrayOf(0x55, 0x55))) { "Invalid start bytes" }
+                require(pkt.sliceArray(pkt.size - 2 until pkt.size).contentEquals(byteArrayOf(0xaa.toByte(),
+                    0xaa.toByte()
+                ))) { "Invalid end bytes" }
+
+                val type = pkt[2]
+                val len = pkt[3]
+                val data = pkt.sliceArray(4 until 4 + len)
+
+                var checksum = type.toInt() xor len.toInt()
+                for (i in data) {
+                    checksum = checksum xor i.toInt()
+                }
+
+                require(checksum.toByte() == pkt[pkt.size - 3]) { "Invalid checksum" }
+
+                return NiimbotPacket(type, data)
+            }
+
+            fun naiveEncoder(img: Bitmap): Sequence<NiimbotPacket> = sequence {
+
+                val grayscaleBitmap = toGrayscale(img)
+                val invertedBitmap = invertColors(grayscaleBitmap)
+                val binaryBitmap = convertToBinary(invertedBitmap)
+                val imgData = bitmapToByteArray(binaryBitmap)
+
+                for (x in 0 until img.height) {
+                    val lineData = imgData.sliceArray(x * 12 until (x + 1) * 12)
+
+                    val counts = Array(3) { i ->
+                        countBitsOfBytes(lineData.sliceArray(i * 4 until (i + 1) * 4))
+                    }
+
+                    val header = ByteBuffer.allocate(6)
+                        .putShort(x.toShort())
+                        .put(counts[0].toByte())
+                        .put(counts[1].toByte())
+                        .put(counts[2].toByte())
+                        .put(1.toByte())
+                        .array()
+
+                    val pkt = NiimbotPacket(0x85.toByte(), header + lineData)
+                    yield(pkt)
+                }
+            }
+
+
+            private fun countBitsOfBytes(data: ByteArray): Int {
+                return data.fold(0L) { acc, byte ->
+                    acc.shl(8).or(byte.toLong() and 0xFF)
+                }.countOneBits()
+            }
+
+            private fun invertColors(bitmap: Bitmap): Bitmap {
+                val width = bitmap.width
+                val height = bitmap.height
+                val invertedBitmap = Bitmap.createBitmap(width, height, bitmap.config)
+
+                for (x in 0 until width) {
+                    for (y in 0 until height) {
+                        val pixel = bitmap.getPixel(x, y)
+                        val red = 255 - Color.red(pixel)
+                        val green = 255 - Color.green(pixel)
+                        val blue = 255 - Color.blue(pixel)
+                        invertedBitmap.setPixel(x, y, Color.rgb(red, green, blue))
+                    }
+                }
+
+                return invertedBitmap
+            }
+
+            private fun toGrayscale(bitmap: Bitmap): Bitmap {
+                val width = bitmap.width
+                val height = bitmap.height
+                val grayscaleBitmap = Bitmap.createBitmap(width, height, bitmap.config)
+
+                for (x in 0 until width) {
+                    for (y in 0 until height) {
+                        val pixel = bitmap.getPixel(x, y)
+                        val avg = (Color.red(pixel) + Color.green(pixel) + Color.blue(pixel)) / 3
+                        grayscaleBitmap.setPixel(x, y, Color.rgb(avg, avg, avg))
+                    }
+                }
+
+                return grayscaleBitmap
+            }
+
+            private fun convertToBinary(bitmap: Bitmap): Bitmap {
+                val width = bitmap.width
+                val height = bitmap.height
+                val binaryBitmap = Bitmap.createBitmap(width, height, bitmap.config)
+
+                for (x in 0 until width) {
+                    for (y in 0 until height) {
+                        val pixel = bitmap.getPixel(x, y)
+                        val avg = (Color.red(pixel) + Color.green(pixel) + Color.blue(pixel)) / 3
+                        binaryBitmap.setPixel(x, y, if (avg < 128) Color.BLACK else Color.WHITE)
+                    }
+                }
+
+                return binaryBitmap
+            }
+
+            private fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
+                val width = bitmap.width
+                val height = bitmap.height
+                val byteArraySize = (width * height + 7) / 8 // Round up division
+                val result = ByteArray(byteArraySize)
+
+                var bytePosition = 0
+                var bitPosition = 0
+                var currentByte: Byte = 0
+
+                for (y in 0 until height) {
+                    for (x in 0 until width) {
+                        val pixel = bitmap.getPixel(x, y)
+                        val isWhite = Color.red(pixel) > 128 || Color.green(pixel) > 128 || Color.blue(pixel) > 128
+                        if (isWhite) {
+                            currentByte = currentByte or (1 shl (7 - bitPosition)).toByte()
+                        }
+
+                        bitPosition++
+                        if (bitPosition == 8) {
+                            result[bytePosition] = currentByte
+                            bytePosition++
+                            bitPosition = 0
+                            currentByte = 0
+                        }
+                    }
+                }
+
+                // If there are remaining bits that haven't been written after looping through the pixels
+                if (bitPosition != 0) {
+                    result[bytePosition] = currentByte
+                }
+
+                return result
+            }
+
+        }
+
+        fun toBytes(): ByteArray {
+            var checksum = type.toInt() xor data.size
+            for (i in data) {
+                checksum = checksum xor i.toInt()
+            }
+
+            return byteArrayOf(0x55, 0x55, type) +
+                    data.size.toByte() +
+                    data +
+                    checksum.toByte() +
+                    byteArrayOf(0xaa.toByte(), 0xaa.toByte())
+        }
+
+        override fun toString(): String {
+            return "<NiimbotPacket type=$type data=${data.contentToString()}>"
+        }
+
+    }
+
+    init {
+        initializeSocket(bluetoothAdapter, address)
+    }
 
     @SuppressLint("MissingPermission")
     private fun initializeSocket(bluetoothAdapter: BluetoothAdapter, address: String) {
@@ -108,7 +306,7 @@ class PrinterClient(
         return packets
     }
 
-    fun send(packet: NiimbotPacket) {
+    private fun send(packet: NiimbotPacket) {
         socket!!.outputStream.write(packet.toBytes())
     }
 
@@ -144,6 +342,7 @@ class PrinterClient(
     private fun packetToInt(packet: NiimbotPacket): Int {
         return packet.data.fold(0) { total, byte -> (total shl 8) + byte.toInt() }
     }
+
     suspend fun getRfid(): Map<String, Any?>? {
         val packet = transceive(RequestCodeEnum.GET_RFID, byteArrayOf(0x01))
         val data = packet!!.data
@@ -178,6 +377,7 @@ class PrinterClient(
             "type" to type
         )
     }
+
     suspend fun heartbeat(): Map<String, Int?> {
         val packet = transceive(RequestCodeEnum.HEARTBEAT, byteArrayOf(0x01))
         val data = packet!!.data
@@ -277,8 +477,54 @@ class PrinterClient(
         val page = buffer.short.toInt()
         val progress1 = buffer.get().toInt()
         val progress2 = buffer.get().toInt()
+        Log.d("Print Status: ", "Print Status: Page: $page, progress1: $progress1, progress2: $progress2")
         return mapOf("page" to page, "progress1" to progress1, "progress2" to progress2)
     }
 
+    private fun resizeBitmap(source: Bitmap, desiredWidth: Int, desiredHeight: Int): Bitmap {
+        val scaleWidth = desiredWidth.toFloat() / source.width
+        val scaleHeight = desiredHeight.toFloat() / source.height
+        val matrix = Matrix()
+        matrix.postScale(scaleWidth, scaleHeight)
+        return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+    }
+
+    suspend fun printLabel(image: Bitmap, width: Int, height: Int, labelQty: Int = 1, labelType: Int = 1, labelDensity: Int = 2) = withContext(Dispatchers.IO) {
+
+        val rotatedPreviewImage = if (image.width != width || image.height != height){
+            rotateBitmap(resizeBitmap(image, width, height), 90f)
+        } else {
+            rotateBitmap(image, 90f)
+        }
+
+        setLabelType(labelType)
+
+        setLabelDensity(labelDensity)
+        startPrint()
+        allowPrintClear()
+        startPagePrint()
+        setDimension(width, height)
+        setQuantity(labelQty)
+
+        // Convert the image to packets and send to the printer
+        val packets = NiimbotPacket.naiveEncoder(rotatedPreviewImage)
+        for (pkt in packets) {
+            send(pkt)
+        }
+
+        endPagePrint()
+        while (getPrintStatus()["page"] != labelQty) {
+            Thread.sleep(100)
+        }
+
+        endPrint()
+
+    }
+
+    private fun rotateBitmap(bitmap: Bitmap, degrees: Float): Bitmap {
+        val matrix = Matrix()
+        matrix.postRotate(degrees)
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
 
 }
