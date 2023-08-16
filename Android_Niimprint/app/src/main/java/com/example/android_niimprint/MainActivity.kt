@@ -45,10 +45,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
-    companion object {
-        const val REQUEST_BT_PERMISSIONS = 100
-        const val BLUETOOTH_ENABLE_REQUEST_CODE = 39383
-    }
 
     private lateinit var bluetoothManager: BluetoothManager
     private lateinit var bluetoothAdapter: BluetoothAdapter
