@@ -1,5 +1,3 @@
-package com.example.invello.printing
-
 import android.annotation.SuppressLint
 import java.nio.ByteBuffer
 import java.util.*
