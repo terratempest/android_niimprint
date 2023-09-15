@@ -1,5 +1,6 @@
+[Buy Me a Coffee](https://www.buymeacoffee.com/terratempest)
+
 # (WIP) Niimbot printer client code to implement in android
-[Buy me a coffee](https://www.paypal.com/donate/?business=9YVMYEDHHWT5J&no_recurring=1&item_name=Buy+me+a+coffee%21&currency_code=USD)
 
 Have only tested this code with a Niimbot D11
 
