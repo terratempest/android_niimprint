@@ -1,5 +1,8 @@
 <a href="https://www.buymeacoffee.com/terratempest" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
+Note, this is not being maintained or updated in any capacity. 
+If you stumple across this check out https://github.com/terratempest/NiimbotPrintHandlerApp, an application that exposes the D11 printer as a printer on the system to print from any android application using the inbuilt system printing dialog.  
+
 # (WIP) Niimbot printer client code to implement in android
 
 Have only tested this code with a Niimbot D11
